@@ -1,5 +1,6 @@
 """领域基础类型与输入校验。"""
 from dataclasses import dataclass
+from datetime import date, datetime, timezone
 from typing import Any, Dict, List
 
 
@@ -86,6 +87,30 @@ def boolean(data: Dict[str, Any], key: str, default: bool = False) -> bool:
     if not isinstance(value, bool):
         raise ValidationError("%s必须是布尔值" % key)
     return value
+
+
+def future_day(data: Dict[str, Any], key: str) -> str:
+    value = text(data, key)
+    try:
+        parsed = date.fromisoformat(value)
+    except ValueError:
+        try:
+            parsed = datetime.fromisoformat(value.replace("Z", "+00:00")).date()
+        except ValueError as exc:
+            raise ValidationError("%s必须是YYYY-MM-DD日期" % key) from exc
+    if parsed <= datetime.now(timezone.utc).date():
+        raise ValidationError("%s必须晚于今天" % key)
+    return parsed.isoformat()
+
+
+def is_expired(expires_at: str, now: datetime = None) -> bool:
+    try:
+        parsed = datetime.fromisoformat(expires_at.replace("Z", "+00:00"))
+    except ValueError:
+        return True
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed <= (now or datetime.now(timezone.utc))
 
 
 def text_list(data: Dict[str, Any], key: str, minimum: int = 0) -> List[str]:

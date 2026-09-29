@@ -6,28 +6,153 @@
   <title>住房贷款纾困申请与履约跟踪</title>
   <style>
     body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; margin: 2rem; color: #17212b; }
-    main { max-width: 960px; margin: auto; }
-    button { padding: .55rem .9rem; cursor: pointer; }
+    main { max-width: 1080px; margin: auto; }
+    button { padding: .45rem .8rem; cursor: pointer; }
     pre { background: #f4f6f8; padding: 1rem; overflow: auto; border-radius: 8px; }
-    .row { display: flex; gap: 1rem; align-items: center; }
+    .row { display: flex; gap: 1rem; align-items: center; flex-wrap: wrap; margin: .6rem 0; }
+    fieldset { border: 1px solid #d5dbe1; border-radius: 8px; margin: 1rem 0; padding: .8rem 1rem; }
+    legend { font-weight: 600; }
+    input, select, textarea { padding: .4rem; border: 1px solid #b9c2cc; border-radius: 6px; }
+    table { border-collapse: collapse; width: 100%; font-size: .9rem; }
+    th, td { border: 1px solid #dde3e9; padding: .35rem .5rem; text-align: left; }
+    .tag { padding: .1rem .45rem; border-radius: 10px; font-size: .8rem; }
+    .pending { background: #fff4d6; } .approved { background: #d9f5e2; }
+    .rejected { background: #fde0e0; } .voided { background: #e6e8eb; }
   </style>
 </head>
 <body>
 <main>
   <h1>住房贷款纾困申请与履约跟踪</h1>
-  <p>最小演示页。完整业务流程通过README中的JSON接口调用。</p>
-  <div class="row"><button id="load">加载记录</button><button id="stats">查看状态统计</button></div>
-  <pre id="output">点击上方按钮读取服务状态。</pre>
+
+  <fieldset>
+    <legend>调用身份</legend>
+    <div class="row">
+      <label>用户ID <input id="uid" value="demo-admin"></label>
+      <label>角色
+        <select id="role">
+          <option value="admin">admin（管理员）</option>
+          <option value="intake_officer">intake_officer（经办）</option>
+          <option value="exception_reviewer">exception_reviewer（例外复核）</option>
+          <option value="underwriter">underwriter（审批）</option>
+          <option value="servicer">servicer（履约）</option>
+        </select>
+      </label>
+      <button id="load">加载记录</button>
+      <button id="stats">状态统计</button>
+    </div>
+  </fieldset>
+
+  <fieldset>
+    <legend>贷款查询</legend>
+    <div class="row">
+      <label>记录ID <input id="rid" size="6" placeholder="如 1"></label>
+      <button id="detail">记录详情</button>
+      <button id="timeline">时间线</button>
+      <button id="exceptions">例外列表</button>
+    </div>
+    <table id="exc-table" hidden>
+      <thead><tr><th>ID</th><th>状态</th><th>发起人</th><th>复核人</th><th>到期日</th><th>失效原因</th><th>操作</th></tr></thead>
+      <tbody></tbody>
+    </table>
+  </fieldset>
+
+  <fieldset>
+    <legend>发起例外（经办，仅评估不通过）</legend>
+    <div class="row">
+      <label>记录ID <input id="ex-rid" size="6"></label>
+      <label>理由 <input id="ex-reason" size="34" placeholder="不少于5个字符"></label>
+      <label>到期日 <input id="ex-exp" type="date"></label>
+      <button id="ex-create">发起例外</button>
+    </div>
+  </fieldset>
+
+  <fieldset>
+    <legend>例外审定（须为发起人之外的复核人）</legend>
+    <div class="row">
+      <label>例外ID <input id="ex-id" size="6"></label>
+      <label>版本 <input id="ex-ver" size="4" value="1"></label>
+      <label>决定
+        <select id="ex-decision"><option value="approve">通过</option><option value="reject">驳回</option></select>
+      </label>
+      <label>意见 <input id="ex-note" size="26" placeholder="驳回必填"></label>
+      <button id="ex-review">提交审定</button>
+      <button id="ex-detail">查看例外详情</button>
+    </div>
+  </fieldset>
+
+  <fieldset>
+    <legend>业务动作（approve 不达标贷款须填例外ID）</legend>
+    <div class="row">
+      <label>记录ID <input id="act-rid" size="6"></label>
+      <label>版本 <input id="act-ver" size="4" value="2"></label>
+      <label>动作
+        <select id="act-name">
+          <option>assess</option><option>approve</option><option>activate</option>
+          <option>cure</option><option>default</option>
+        </select>
+      </label>
+      <label>例外ID <input id="act-exc" size="6" placeholder="仅approve"></label>
+      <button id="act-run">执行</button>
+    </div>
+  </fieldset>
+
+  <pre id="output">就绪。先在上方选择身份并加载记录。</pre>
 </main>
 <script>
-const headers = {"X-User-Id":"demo-admin","X-Role":"admin","X-Org":"demo"};
-async function show(path) {
-  const response = await fetch(path, {headers});
-  const data = await response.json();
-  document.getElementById("output").textContent = JSON.stringify(data, null, 2);
+const $ = (id) => document.getElementById(id);
+function headers() {
+  return {"X-User-Id": $("uid").value.trim(), "X-Role": $("role").value, "X-Org": "demo",
+          "Content-Type": "application/json"};
 }
-document.getElementById("load").onclick = () => show("/api/records?limit=20");
-document.getElementById("stats").onclick = () => show("/api/stats");
+async function call(method, path, body) {
+  const response = await fetch(path, {method, headers: headers(), body: body ? JSON.stringify(body) : undefined});
+  return {status: response.status, data: await response.json()};
+}
+function show(result) {
+  $("output").textContent = "HTTP " + result.status + "\n" + JSON.stringify(result.data, null, 2);
+}
+$("load").onclick = async () => show(await call("GET", "/api/records?limit=20"));
+$("stats").onclick = async () => show(await call("GET", "/api/stats"));
+$("detail").onclick = async () => show(await call("GET", "/api/records/" + $("rid").value));
+$("timeline").onclick = async () => show(await call("GET", "/api/records/" + $("rid").value + "/audit"));
+
+$("exceptions").onclick = async () => {
+  const result = await call("GET", "/api/records/" + $("rid").value + "/exceptions");
+  show(result);
+  const table = $("exc-table"), tbody = table.querySelector("tbody");
+  tbody.innerHTML = "";
+  if (result.data.items && result.data.items.length) {
+    table.hidden = false;
+    for (const e of result.data.items) {
+      const tr = document.createElement("tr");
+      tr.innerHTML = `<td>${e.id}</td>
+        <td><span class="tag ${e.state}">${e.state}</span></td>
+        <td>${e.requested_by}</td><td>${e.reviewed_by || "—"}</td>
+        <td>${e.expires_at}</td><td>${e.void_reason || "—"}</td><td></td>`;
+      const btn = document.createElement("button");
+      btn.textContent = "详情";
+      btn.onclick = async () => show(await call("GET", "/api/exceptions/" + e.id));
+      tr.lastElementChild.appendChild(btn);
+      tbody.appendChild(tr);
+    }
+  } else { table.hidden = true; }
+};
+$("ex-create").onclick = async () => show(await call("POST", "/api/records/" + $("ex-rid").value + "/exceptions",
+  {data: {reason: $("ex-reason").value, expires_at: $("ex-exp").value}}));
+$("ex-review").onclick = async () => show(await call("POST", "/api/exceptions/" + $("ex-id").value + "/review",
+  {expected_version: Number($("ex-ver").value), data: {decision: $("ex-decision").value, review_note: $("ex-note").value}}));
+$("ex-detail").onclick = async () => show(await call("GET", "/api/exceptions/" + $("ex-id").value));
+$("act-run").onclick = async () => {
+  const data = {};
+  const action = $("act-name").value;
+  if ($("act-exc").value) data.exception_id = Number($("act-exc").value);
+  if (action === "assess") data.assessment_note = "演示评估";
+  if (action === "activate") data.borrower_ack = true;
+  if (action === "cure") data.arrears_cleared = true;
+  if (action === "default") data.default_reason = "演示违约";
+  show(await call("POST", `/api/records/${$("act-rid").value}/actions/${action}`,
+    {expected_version: Number($("act-ver").value), data}));
+};
 </script>
 </body>
 </html>

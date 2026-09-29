@@ -12,6 +12,9 @@ from .domain import Actor, DomainError, PermissionDenied, ValidationError
 RECORD_RE = re.compile(r"^/api/records/(\d+)$")
 ACTION_RE = re.compile(r"^/api/records/(\d+)/actions/([a-z_]+)$")
 AUDIT_RE = re.compile(r"^/api/records/(\d+)/audit$")
+EXCEPTIONS_RE = re.compile(r"^/api/records/(\d+)/exceptions$")
+EXCEPTION_DETAIL_RE = re.compile(r"^/api/exceptions/(\d+)$")
+EXCEPTION_REVIEW_RE = re.compile(r"^/api/exceptions/(\d+)/review$")
 
 
 def make_handler(service: Any, static_dir: Path):
@@ -84,6 +87,14 @@ def make_handler(service: Any, static_dir: Path):
                 if match:
                     self._send(200, {"items": service.timeline(self._actor(), int(match.group(1)))})
                     return
+                match = EXCEPTIONS_RE.match(parsed.path)
+                if match:
+                    self._send(200, {"items": service.list_exceptions(self._actor(), int(match.group(1)))})
+                    return
+                match = EXCEPTION_DETAIL_RE.match(parsed.path)
+                if match:
+                    self._send(200, service.get_exception(self._actor(), int(match.group(1))))
+                    return
                 if parsed.path == "/api/stats":
                     self._send(200, service.stats(self._actor()))
                     return
@@ -98,6 +109,19 @@ def make_handler(service: Any, static_dir: Path):
                 if parsed.path == "/api/records":
                     record = service.create(self._actor(), body.get("reference", ""), body.get("data", {}))
                     self._send(201, record)
+                    return
+                match = EXCEPTIONS_RE.match(parsed.path)
+                if match:
+                    exception = service.request_exception(self._actor(), int(match.group(1)), body.get("data", {}))
+                    self._send(201, exception)
+                    return
+                match = EXCEPTION_REVIEW_RE.match(parsed.path)
+                if match:
+                    version = body.get("expected_version")
+                    if not isinstance(version, int):
+                        raise ValidationError("expected_version必须是整数")
+                    exception = service.review_exception(self._actor(), int(match.group(1)), version, body.get("data", {}))
+                    self._send(200, exception)
                     return
                 match = ACTION_RE.match(parsed.path)
                 if match:

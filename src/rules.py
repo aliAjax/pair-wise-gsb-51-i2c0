@@ -1,26 +1,38 @@
 """住房贷款纾困申请与履约跟踪领域规则与状态转换。"""
 from typing import Any, Dict, Iterable, Tuple
 
-from .domain import Actor, Conflict, ValidationError, boolean, choice, integer, number, text, text_list
+from .domain import Actor, Conflict, ValidationError, boolean, choice, future_date, integer, number, text, text_list
 
 
 INITIAL_STATE = "submitted"
 CREATE_ROLES = {'intake_officer'}
+EXCEPTION_REQUEST_ROLES = {'intake_officer'}
+EXCEPTION_REVIEW_ROLES = {'exception_reviewer'}
 ACTION_ROLES = {'assess': {'intake_officer'}, 'approve': {'underwriter'}, 'activate': {'servicer'}, 'cure': {'servicer'}, 'default': {'servicer'}}
 TRANSITIONS = {'assess': {'submitted': 'assessed'}, 'approve': {'assessed': 'approved'}, 'activate': {'approved': 'active'}, 'cure': {'active': 'cured'}, 'default': {'active': 'defaulted'}}
+
+# 例外状态：pending待审 approved复核通过 rejected复核驳回 voided失效(过期/方案违约)
+EXCEPTION_TERMINAL_STATES = {'rejected', 'voided'}
+EXCEPTION_VOID_REASONS = {'expired': '例外过期', 'defaulted': '方案违约'}
 
 
 class DomainRules:
     INITIAL_STATE = INITIAL_STATE
 
     def known_role(self, role: str) -> bool:
-        all_roles = set(CREATE_ROLES)
+        all_roles = set(CREATE_ROLES) | set(EXCEPTION_REQUEST_ROLES) | set(EXCEPTION_REVIEW_ROLES)
         for roles in ACTION_ROLES.values():
             all_roles.update(roles)
         return role == "admin" or role in all_roles
 
     def role_can_create(self, role: str) -> bool:
         return role == "admin" or role in CREATE_ROLES
+
+    def role_can_request_exception(self, role: str) -> bool:
+        return role == "admin" or role in EXCEPTION_REQUEST_ROLES
+
+    def role_can_review_exception(self, role: str) -> bool:
+        return role == "admin" or role in EXCEPTION_REVIEW_ROLES
 
     def role_can_action(self, role: str, action: str) -> bool:
         return role == "admin" or role in ACTION_ROLES.get(action, set())
@@ -62,6 +74,32 @@ class DomainRules:
             if item["state"] in {"active", "approved", "assessed"} and item["payload"].get("borrower_id") == payload.get("borrower_id"):
                 raise Conflict("该借款人已有处理中纾困申请")
 
+    def validate_exception_request(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        """经办人发起例外：必填理由与到期日。"""
+        reason = text(payload or {}, "reason")
+        if len(reason) < 5:
+            raise ValidationError("例外理由至少需要5个字符")
+        return {"reason": reason, "expires_at": future_date(payload or {}, "expires_at")}
+
+    def validate_exception_review(self, payload: Dict[str, Any]) -> Tuple[bool, str]:
+        """复核人审定：approve/reject，驳回须填写意见，通过时意见可选。"""
+        decision = choice(payload or {}, "decision", ["approve", "reject"])
+        if decision == "reject":
+            note = text(payload or {}, "review_note")
+        else:
+            note = (payload or {}).get("review_note", "")
+            note = note.strip() if isinstance(note, str) else ""
+        return decision == "approve", note
+
+    @staticmethod
+    def exception_is_effective(exception: Dict[str, Any], today: str) -> bool:
+        """复核通过、未被方案使用且未到期，方为有效例外。"""
+        return (
+            exception["state"] == "approved"
+            and exception["consumed_record_version"] is None
+            and exception["expires_at"] >= today
+        )
+
     def require_transition(self, record: Dict[str, Any], action: str) -> str:
         allowed = TRANSITIONS.get(action, {}).get(record["state"])
         if allowed is None:
@@ -79,13 +117,9 @@ class DomainRules:
             changes["eligibility"] = bool(float(p["housing_ratio"]) <= 0.8 and float(p["arrears"]) <= float(p["monthly_payment"]) * 6)
             summary = "偿付能力评估完成"
         elif action == "approve":
-            exception = boolean(data, "exception_approved")
-            if not p.get("eligibility") and not exception:
-                raise ValidationError("不符合纾困资格且无例外批准")
             changes["approved_program"] = p["program_type"]
             changes["approved_months"] = int(p["eligible_months"])
             changes["approved_payment"] = float(p["proposed_payment"])
-            changes["exception_approved"] = exception
             summary = "纾困方案批准"
         elif action == "activate":
             if not boolean(data, "borrower_ack"):
